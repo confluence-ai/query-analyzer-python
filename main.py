@@ -10,6 +10,7 @@ from flask import Flask, request, jsonify
 
 # Import custom modules
 from query_parser.furniture_parser import FurnitureParser
+from query_suggestion.suggestion import QuerySuggestion
 
 # Suppress warnings for cleaner output
 warnings.filterwarnings('ignore')
@@ -29,13 +30,14 @@ app = Flask(__name__)
 CORS(app)
 
 # Load parser ONCE at startup (heavy models initialized here)
-logger.info("Loading FurnitureParser and ML models...")
+logger.info("Loading FurnitureParser, QuerySuggestion and ML models...")
 parser = FurnitureParser()
+suggest = QuerySuggestion()
 logger.info("Models loaded successfully.")
 
 @app.route('/query/analyze', methods=['POST'])
 def analyzeQuery():
-    """ Main processing endpoint """
+    """ Main processing endpoint for query analyzer """
     try:
         query = request.json.get('query')
         if not query:
@@ -67,6 +69,28 @@ def analyzeQuery():
         logger.exception("Error in analyzeQuery")
         return jsonify({"success": False, "error": f"Server error: {str(e)}"}), 500
     
+@app.route('/query/suggestion', methods=['POST'])
+def querySuggestion():
+    """ Main processing endpoint for query suggestion 
+        Returns top 5 matches for product names, brand names, and styles based on the input query.
+        The search is prefix-matching and case-insensitive.
+    """
+    try:
+        query = request.json.get('query')
+        if not query:
+            return jsonify({"success": False, "error": "Query is required"}), 400
+        
+        results = suggest.suggestQueryResults(query)
+        
+        if results:
+            return results
+        
+        return jsonify({"success": False, "error": "Issue while fetching data."}), 400
+    
+    except Exception as e:
+        logger.exception("Error in querySuggestion")
+        return jsonify({"success": False, "error": f"Server error: {str(e)}"}), 500
+
 # Health Check Endpoints
 @app.route("/health", methods=["GET"])
 async def healthCheck():

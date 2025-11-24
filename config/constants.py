@@ -8,7 +8,6 @@ BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # Database - Table and column Names
 BRAND_TABLE = '"Brand"'
 PRODUCT_TABLE = 'product'
-COLUMN_NAME = 'name'
 
 # Load furniture categories from JSON file
 with open(os.path.join(BASE_DIR, "dictionary", "furniture_features.json")) as f:

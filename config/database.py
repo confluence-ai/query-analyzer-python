@@ -1,16 +1,14 @@
 # Import necessary libraries
 import os
 import psycopg2
-from psycopg2.extras import RealDictCursor
-from psycopg2 import pool
 from dotenv import load_dotenv
-from typing import List, Optional, Any, Dict
+from typing import List, Any, Dict
 import threading
-from datetime import datetime, timedelta
+from datetime import timedelta
 import logging
 
 # Import constants and mappings
-from config.constants import BRAND_TABLE, PRODUCT_TABLE, COLUMN_NAME
+from config.constants import BRAND_TABLE, PRODUCT_TABLE
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -28,7 +26,7 @@ class DatabaseManager:
     _connection_pool = None
     _pool_lock = threading.Lock()
     
-    def __init__(self, use_cache: bool = True, use_connection_pool: bool = True):
+    def __init__(self, use_connection_pool: bool = True):
         """
             Initialize the DatabaseManager with configuration from environment variables.
             
@@ -45,8 +43,7 @@ class DatabaseManager:
         self.user = os.getenv("DB_USERNAME")
         self.password = os.getenv("DB_PASSWORD")
         self.dbname = os.getenv("DB_DATABASE")
-        
-        self.use_cache = use_cache
+
         self.use_connection_pool = use_connection_pool
         
         # Initialize connection pool if enabled
@@ -117,131 +114,34 @@ class DatabaseManager:
         except Exception as e:
             logger.error(f"Error closing connection: {e}")
     
-    def _getCacheKey(self, column: str, table: str, where_clause: Optional[str] = None) -> str:
+    def _fetchData(self, table: str, text: str) -> List[Any]:
         """
-            Generate a unique cache key for a query.
-            
-            Args:
-                column (str): Column name
-                table (str): Table name
-                where_clause (str, optional): WHERE clause
-            
-            Returns:
-                str: Unique cache key
-        """
-        return f"{table}:{column}:{where_clause or 'all'}"
-    
-    def _isCacheValid(self, cache_key: str) -> bool:
-        """
-            Check if cached data is still valid (not expired).
-            
-            Args:
-                cache_key (str): Cache key to check
-            
-            Returns:
-                bool: True if cache is valid, False otherwise
-        """
-        if cache_key not in self._cache_timestamps:
-            return False
-        
-        age = datetime.now() - self._cache_timestamps[cache_key]
-        return age < self._cache_ttl
-    
-    def _getFromCache(self, cache_key: str) -> Optional[List[Any]]:
-        """
-            Retrieve data from cache if available and valid.
-            
-            Args:
-                cache_key (str): Cache key
-            
-            Returns:
-                Optional[List[Any]]: Cached data or None
-        """
-        with self._cache_lock:
-            if cache_key in self._cache and self._isCacheValid(cache_key):
-                logger.debug(f"Cache hit: {cache_key}")
-                return self._cache[cache_key]
-        return None
-    
-    def _saveToCache(self, cache_key: str, data: List[Any]):
-        """
-            Save data to cache with timestamp.
-            
-            Args:
-                cache_key (str): Cache key
-                data (List[Any]): Data to cache
-        """
-        with self._cache_lock:
-            self._cache[cache_key] = data
-            self._cache_timestamps[cache_key] = datetime.now()
-            logger.debug(f"Cached: {cache_key} ({len(data)} items)")
-    
-    def clearCache(self, table: Optional[str] = None):
-        """
-            Clear cached data (useful after database updates).
-            
-            Args:
-                table (str, optional): Clear cache for specific table only. 
-                                     If None, clears all cache.
-        """
-        with self._cache_lock:
-            if table:
-                # Clear only cache entries for specific table
-                keys_to_delete = [k for k in self._cache.keys() if k.startswith(f"{table}:")]
-                for key in keys_to_delete:
-                    del self._cache[key]
-                    del self._cache_timestamps[key]
-                logger.info(f"Cleared cache for table: {table}")
-            else:
-                # Clear all cache
-                self._cache.clear()
-                self._cache_timestamps.clear()
-                logger.info("Cleared all cache")
-    
-    def _fetchData(self, column: str, table: str, where_clause: Optional[str] = None, 
-                   use_cache: Optional[bool] = None) -> List[Any]:
-        """
-            Fetch data from a specified column and table in the database.
+            Fetch data from a specified table in the database.
             Implements caching and optimized queries.
             
             Args:
-                column (str): The column name to fetch data from
                 table (str): The table name to query
-                where_clause (str, optional): SQL WHERE clause without the 'WHERE' keyword.
-                use_cache (bool, optional): Override instance cache setting for this query
+                text (str): Text from user
             
             Returns:
                 List[Any]: List of values from the specified column. Returns empty list on error.
         """
-        # Determine if we should use cache for this query
-        should_cache = use_cache if use_cache is not None else self.use_cache
-        
-        # Check cache first
-        if should_cache:
-            cache_key = self._getCacheKey(column, table, where_clause)
-            cached_data = self._getFromCache(cache_key)
-            if cached_data is not None:
-                return cached_data
-        
         conn = None
         try:
             # Establish database connection
             conn = self._getConnection()
             cur = conn.cursor()
+            search_term = f"{text}%"
             
             # Build optimized SQL query
-            # Use DISTINCT to avoid duplicates and reduce data transfer
-            query = f'SELECT DISTINCT {column} FROM {table}'
-            if where_clause:
-                query += f' WHERE {where_clause}'
-            
-            # Add ordering for consistent results (helps with caching)
-            query += f' ORDER BY {column}'
-            query += ';'
+            if table == PRODUCT_TABLE:
+                query = f'SELECT DISTINCT id, name FROM {table} WHERE name ILIKE %s and "isPublished" = True LIMIT 10;'
+            else:
+                query = f'SELECT DISTINCT id, name FROM {table} WHERE name ILIKE %s LIMIT 10;'
             
             # Execute query
             logger.debug(f"Executing query: {query}")
-            cur.execute(query)
+            cur.execute(query, (search_term,))
             
             # Fetch all results
             rows = cur.fetchall()
@@ -250,13 +150,9 @@ class DatabaseManager:
             cur.close()
             
             # Extract column values (filter out None values)
-            result = [row[0] for row in rows if row[0] is not None]
+            result = [{'id': row[0], 'name': row[1]} for row in rows if row[0] is not None]
             
-            # Save to cache
-            if should_cache:
-                self._saveToCache(cache_key, result)
-            
-            logger.info(f"Fetched {len(result)} items from {table}.{column}")
+            logger.info(f"Fetched {len(result)} items from {table}")
             return result
             
         except psycopg2.Error as e:
@@ -268,111 +164,29 @@ class DatabaseManager:
         finally:
             if conn:
                 self._releaseConnection(conn)
-    
-    def _fetchDataBatch(self, column: str, table: str, batch_size: int = 1000, 
-                       where_clause: Optional[str] = None) -> List[Any]:
+
+    def fetchBrandNames(self, text: str) -> List[str]:
         """
-            Fetch data in batches using cursor (server-side cursor for large datasets).
-            This prevents loading all data into memory at once.
+            Fetch brand names from the Brand table.
             
             Args:
-                column (str): Column name to fetch
-                table (str): Table name
-                batch_size (int): Number of rows to fetch per batch
-                where_clause (str, optional): WHERE clause
-            
-            Returns:
-                List[Any]: List of all fetched values
-        """
-        conn = None
-        try:
-            conn = self._getConnection()
-            
-            # Use named cursor for server-side cursor (efficient for large datasets)
-            cur = conn.cursor(name='fetch_cursor')
-            cur.itersize = batch_size
-            
-            # Build query
-            query = f'SELECT DISTINCT {column} FROM {table}'
-            if where_clause:
-                query += f' WHERE {where_clause}'
-            query += f' ORDER BY {column};'
-            
-            # Execute query
-            cur.execute(query)
-            
-            # Fetch all results in batches
-            result = []
-            while True:
-                rows = cur.fetchmany(batch_size)
-                if not rows:
-                    break
-                result.extend([row[0] for row in rows if row[0] is not None])
-            
-            cur.close()
-            logger.info(f"Fetched {len(result)} items in batches from {table}.{column}")
-            return result
-            
-        except psycopg2.Error as e:
-            logger.error(f"Database error in batch fetch: {e}")
-            return []
-        except Exception as e:
-            logger.error(f"Error in batch fetch: {e}")
-            return []
-        finally:
-            if conn:
-                self._releaseConnection(conn)
-    
-    def fetchBrandNames(self, use_cache: bool = True) -> List[str]:
-        """
-            Fetch all brand names from the Brand table.
-            Uses caching by default for performance.
-            
-            Args:
-                use_cache (bool): Whether to use cache for this query
+                text (str): Users input text
             
             Returns:
                 List[str]: List of brand names
         """
-        return self._fetchData(COLUMN_NAME, BRAND_TABLE, use_cache=use_cache)
+        return self._fetchData(BRAND_TABLE, text)
     
-    def fetchProductNames(self, use_cache: bool = True) -> List[str]:
+    def fetchProductNames(self, text: str) -> List[str]:
         """
             Fetch all product names from the product table.
-            Uses caching by default for performance.
             
             Args:
-                use_cache (bool): Whether to use cache for this query
-            
+                text (str): Users input text
             Returns:
                 List[str]: List of product names
         """
-        return self._fetchData(COLUMN_NAME, PRODUCT_TABLE, use_cache=use_cache)
-    
-    def fetchBrandNamesActive(self, use_cache: bool = True) -> List[str]:
-        """
-            Fetch only active brand names (if you have a status column).
-            
-            Args:
-                use_cache (bool): Whether to use cache
-            
-            Returns:
-                List[str]: List of active brand names
-        """
-        # Modify WHERE clause based on your schema
-        return self._fetchData(COLUMN_NAME, BRAND_TABLE, 
-                              where_clause="status = 'active'", 
-                              use_cache=use_cache)
-    
-    def prefetchAllData(self):
-        """
-            Prefetch and cache all commonly accessed data.
-            Call this once during application startup for best performance.
-        """
-        logger.info("Prefetching all data into cache...")
-        self.fetchBrandNames(use_cache=True)
-        self.fetchProductNames(use_cache=True)
-        logger.info("Prefetch complete")
+        return self._fetchData(PRODUCT_TABLE, text)
     
     def closeConnectionPool(self):
         """
