@@ -55,13 +55,63 @@ class FeatureExtractor:
             category = CATEGORY_MAPPINGS.get(main_feature, 'Other')
             self.feature_to_category[main_feature] = category
 
-    def _getCategoriesFromText(self, text: str) -> List[str]:
+    def _isNegatedFeature(self, feature: str, original_text: str) -> bool:
+        """
+        Check if a feature contradicts the user's actual intent
+        
+        Args:
+            feature: The detected feature (e.g., "without arms")
+            original_text: The original query text
+            
+        Returns:
+            bool: True if feature should be rejected due to negation
+        """
+        original_lower = original_text.lower()
+        
+        # Handle "without X" features when user said "with X"
+        if feature.startswith('without '):
+            base_feature = feature.replace('without ', '').strip()
+            
+            # Check if user explicitly said "with [feature]"
+            with_patterns = [
+                rf'\bwith\s+{re.escape(base_feature)}\b',
+                rf'\bincluding\s+{re.escape(base_feature)}\b',
+                rf'\bhas\s+{re.escape(base_feature)}\b',
+                rf'\bhave\s+{re.escape(base_feature)}\b',
+            ]
+            
+            for pattern in with_patterns:
+                if re.search(pattern, original_lower):
+                    logger.debug(f"  ⚠️ NEGATION DETECTED: User said 'with {base_feature}' but feature is '{feature}' - REJECTING")
+                    return True
+        
+        # Handle "with X" features when user said "without X"
+        elif feature.startswith('with ') or 'with' in feature:
+            # Extract base feature (e.g., "arms" from "with arms")
+            base_feature = feature.replace('with ', '').replace('including ', '').strip()
+            
+            # Check if user explicitly said "without [feature]"
+            without_patterns = [
+                rf'\bwithout\s+{re.escape(base_feature)}\b',
+                rf'\bno\s+{re.escape(base_feature)}\b',
+                rf'\b{re.escape(base_feature)}\s*-?\s*less\b',  # armless, arm-less, arm less
+            ]
+            
+            for pattern in without_patterns:
+                if re.search(pattern, original_lower):
+                    logger.debug(f"  ⚠️ NEGATION DETECTED: User said 'without {base_feature}' but feature is '{feature}' - REJECTING")
+                    return True
+        
+        return False
+
+    def _getCategoriesFromText(self, text: str, original_text: str) -> List[str]:
         """
             Extract features using greedy longest-match-first algorithm
             to prevent overlapping and redundant matches
             
             Args:
                 text (str): The preprocessed input text
+                original_text (str): The original query for negation checking
 
             Returns:
                 List[str]: List of unique detected features
@@ -71,6 +121,7 @@ class FeatureExtractor:
         
         logger.debug(f"\n{'='*60}")
         logger.debug(f"EXTRACTING FEATURES FROM: '{text}'")
+        logger.debug(f"ORIGINAL QUERY: '{original_text}'")
         logger.debug(f"WORDS: {words} (indices 0-{word_count-1})")
         logger.debug(f"{'='*60}")
         
@@ -100,11 +151,18 @@ class FeatureExtractor:
                 if phrase in self.synonym_to_feature:
                     matched_feature = self.synonym_to_feature[phrase]
                     match_type = "direct"
-                    logger.debug(f"    → Direct match found!")
+                    logger.debug(f"    → Direct match found: '{matched_feature}'")
                 
                 # Try fuzzy match for longer phrases
                 elif len(phrase) > 6:
-                    fuzzy_threshold = 0.96 if ("detail" in phrase or "metal" in phrase) else 0.93
+                    # CRITICAL FIX: Increase threshold for with/without to prevent cross-matching
+                    if "with" in phrase or "without" in phrase:
+                        fuzzy_threshold = 0.98  # Very strict for with/without features
+                    elif "detail" in phrase or "metal" in phrase:
+                        fuzzy_threshold = 0.96
+                    else:
+                        fuzzy_threshold = 0.93
+                    
                     result = fuzzyMatch(phrase, self.all_synonyms, threshold=fuzzy_threshold)
                     
                     if result:
@@ -112,10 +170,15 @@ class FeatureExtractor:
                         if fuzzy_match in self.synonym_to_feature:
                             matched_feature = self.synonym_to_feature[fuzzy_match]
                             match_type = "fuzzy"
-                            logger.debug(f"    → Fuzzy match found: '{fuzzy_match}'")
+                            logger.debug(f"    → Fuzzy match found: '{fuzzy_match}' -> '{matched_feature}'")
                 
-                # If we found a match, record it
+                # If we found a match, validate it
                 if matched_feature:
+                    # CRITICAL FIX: Check for negation first
+                    if self._isNegatedFeature(matched_feature, original_text):
+                        logger.debug(f"    → Match REJECTED due to negation")
+                        continue
+                    
                     # Check contextual relevance
                     if self._hasContextualMatch(phrase, words, start_idx):
                         if matched_feature not in detected_features:
@@ -191,7 +254,7 @@ class FeatureExtractor:
     
     def extractFeatures(self, text: str) -> Tuple[List[str], str]:
         """
-            Improved feature extraction with greedy matching
+            Improved feature extraction with greedy matching and negation detection
             
             Args:
                 text: Input text to extract features from
@@ -202,8 +265,8 @@ class FeatureExtractor:
         text_lower = text.lower()
         text_clean = text.lower().strip()
         
-        # Extract features using greedy algorithm
-        detected_features = self._getCategoriesFromText(text_lower)
+        # Extract features using greedy algorithm (pass original text for negation checking)
+        detected_features = self._getCategoriesFromText(text_lower, text)
         
         # Disambiguation: prevent both "l shape" and "c shape" from appearing together
         if any("l shape" in f for f in detected_features) and any("c shape" in f for f in detected_features):

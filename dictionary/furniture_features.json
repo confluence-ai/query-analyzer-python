@@ -138,7 +138,7 @@
   "low back": ["short back", "low profile back", "cropped back", "reduced height back", "short height back", "shallow back", "low-rise back", "minimal back", "sitting back", "compact back"],
   "high back": ["tall back", "extended back", "elevated back", "high-rise back", "towering back"],
   "standard back": ["regular back", "traditional back", "mid-height back", "average back", "classic back"],
-
+  "arms": ["with arms", "including arms"],
   "metal legs": [
         "steel legs",
         "chrome legs",
