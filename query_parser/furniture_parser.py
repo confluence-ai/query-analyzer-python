@@ -9,6 +9,7 @@ from config.config import ParserResult
 from query_parser.product_type_extractor import ProductTypeExtractor
 from query_parser.feature_extractor import FeatureExtractor
 from query_parser.price_extractor import PriceExtractor
+from query_parser.style_extractor import StyleExtractor
 from query_parser.classification_extractor import StyleClassification
 
 # Configure logging
@@ -30,6 +31,7 @@ class FurnitureParser:
         # Load Extraction models
         self.product_type_extractor = ProductTypeExtractor()
         self.price_extractor = PriceExtractor()
+        self.style_extractor = StyleExtractor()
         self.classification_extractor = StyleClassification()
         self.feature_extractor = FeatureExtractor()
     
@@ -47,9 +49,10 @@ class FurnitureParser:
                 
 
         # STEP 1: Extract features, type, classification from ORIGINAL query
-        product_types, product_confidence, corrected_query = self.product_type_extractor.classifyProductType(query)
-        features, corrected_query = self.feature_extractor.extractFeatures(corrected_query)
+        product_types, product_confidence = self.product_type_extractor.classifyProductType(query)
+        features = self.feature_extractor.extractFeatures(query)
         classifications = self.classification_extractor.extractClassification(query)
+        styles = self.style_extractor.extractStyles(query)
         
         # STEP 2: Extract price from query
         price_range = self.price_extractor.extractPriceRange(query)
@@ -59,11 +62,12 @@ class FurnitureParser:
             features=features,
             price_range=price_range,
             location="",
+            styles=styles,
             confidence_score=product_confidence[0] if product_confidence else 0.0,
             classification_summary=classifications,
             extras=[],
             original_query=query,
-            suggested_query=corrected_query if corrected_query != query else None
+            suggested_query=None
         )
         
         return result
@@ -87,6 +91,7 @@ class FurnitureParser:
             "location": result.location,
             "classification_summary": result.classification_summary,
             "extras": result.extras,
+            "styles": result.styles,
             "confidence_score": result.confidence_score,
             "original_query": result.original_query,
             "suggested_query": result.suggested_query  # Include in output

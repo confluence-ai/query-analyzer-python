@@ -17,6 +17,7 @@ class ParserResult:
     features: List[str]
     price_range: Optional[PriceRange]
     location: Optional[str]
+    styles: List[str]
     classification_summary: Optional[Dict[str, Any]]
     extras: Optional[List[str]]
     confidence_score: float

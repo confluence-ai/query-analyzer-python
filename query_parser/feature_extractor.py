@@ -188,66 +188,6 @@ class FeatureExtractor:
                             detected.append(feature_lower)
 
         return detected
-
-    def _applyCorrection(self, original_text: str, text_clean: str, matched_categories: List[str], locked_product_terms: List[str] = ['armchair']) -> str:
-        """
-        Corrects spelling mistakes in feature-related words
-        """
-        corrected_text = original_text
-        locked_product_terms = [w.lower() for w in (locked_product_terms or [])]
-
-        # Exclude product-type terms from correction
-        try:
-            from config.constants import FURNITURE_TYPE
-            excluded_terms = set()
-            for main_cat, synonyms in FURNITURE_TYPE.items():
-                excluded_terms.add(main_cat.lower())
-                for syn in synonyms:
-                    excluded_terms.add(syn.lower())
-        except ImportError:
-            excluded_terms = set()
-
-        # Build correction targets (features only)
-        correction_targets = set()
-        for synonym in self.all_synonyms:
-            for part in synonym.split():
-                if part.lower() not in excluded_terms:
-                    correction_targets.add(part.lower())
-
-        for cat in matched_categories:
-            for part in cat.split():
-                if part.lower() not in excluded_terms:
-                    correction_targets.add(part.lower())
-
-        shape_terms = ["circular", "round", "rectangular", "square", "oval", "inclined"]
-        correction_targets.update(shape_terms)
-
-        words = re.findall(r'\b\w{3,}\b', text_clean)
-
-        for word in words:
-            word_lower = word.lower()
-
-            # Skip locked product words
-            if any(word_lower in lp for lp in locked_product_terms):
-                continue
-
-            best_match, best_score = None, 0.0
-            for target in correction_targets:
-                score = SequenceMatcher(None, word_lower, target).ratio()
-                if score > best_score:
-                    best_score = score
-                    best_match = target
-
-            if best_match and best_score >= 0.7 and word_lower != best_match:
-                if best_match not in excluded_terms:
-                    corrected_text = re.sub(
-                        r'\b' + re.escape(word) + r'\b',
-                        best_match,
-                        corrected_text,
-                        flags=re.IGNORECASE
-                    )
-
-        return corrected_text
     
     def extractFeatures(self, text: str) -> Tuple[List[str], str]:
         """
@@ -272,7 +212,4 @@ class FeatureExtractor:
             elif "c" in text_lower and "l" not in text_lower:
                 detected_features = [f for f in detected_features if f != "l shape"]
         
-        # Apply spelling correction
-        corrected_query = self._applyCorrection(text, text_clean, detected_features)
-        
-        return detected_features, corrected_query
+        return detected_features
